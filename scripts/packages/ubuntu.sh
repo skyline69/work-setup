@@ -34,3 +34,6 @@ packages_for_group_ubuntu() {
   esac
 }
 
+aur_packages_for_group_ubuntu() {
+  return 0
+}

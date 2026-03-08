@@ -34,3 +34,6 @@ packages_for_group_fedora() {
   esac
 }
 
+aur_packages_for_group_fedora() {
+  return 0
+}

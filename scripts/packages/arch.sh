@@ -28,12 +28,19 @@ packages_for_group_arch() {
     apps)
       printf '%s\n' dolphin chromium
       ;;
-    quickshell)
-      printf '%s\n' quickshell-git
-      ;;
     *)
       return 1
       ;;
   esac
 }
 
+aur_packages_for_group_arch() {
+  case "$1" in
+    quickshell)
+      printf '%s\n' quickshell-git
+      ;;
+    *)
+      return 0
+      ;;
+  esac
+}

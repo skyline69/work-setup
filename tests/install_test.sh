@@ -93,9 +93,12 @@ EOS
 
 test_resolve_package_plan_includes_supported_and_unsupported() {
   local output
+  local supported_line
   output=$(resolve_package_plan arch core,quickshell)
+  supported_line=$(awk -F= '$1 == "SUPPORTED_PACKAGES" { print $2 }' <<<"$output")
   assert_contains "$output" "SUPPORTED_PACKAGES=" "package plan should include supported packages"
-  assert_contains "$output" "quickshell-git" "arch quickshell group should include aur package"
+  assert_contains "$output" "AUR_PACKAGES=quickshell-git" "arch quickshell group should emit quickshell as an AUR package"
+  assert_not_contains "$supported_line" "quickshell-git" "arch quickshell group should not send AUR packages to pacman"
 
   output=$(resolve_package_plan ubuntu core,quickshell)
   assert_contains "$output" "UNSUPPORTED_GROUPS=quickshell" "ubuntu should mark quickshell unsupported"
@@ -162,6 +165,51 @@ EOF
   assert_file_equals "$destination_file" 'downloaded via curl' "download_with_progress should use the curl stub to create the downloaded file"
   assert_file_contains "$curl_log" '-fL#' "download_with_progress should enable curl progress output for https URLs"
   assert_file_contains "$curl_log" 'https://example.com/file.gif' "download_with_progress should pass the source URL to curl"
+}
+
+test_install_packages_arch_requires_aur_helper_for_aur_packages() {
+  local output
+  local status
+
+  set +e
+  output=$((
+    aur_helper_for_arch() {
+      return 1
+    }
+    install_packages arch $'SUPPORTED_PACKAGES=\nAUR_PACKAGES=quickshell-git\nUNSUPPORTED_GROUPS='
+  ) 2>&1)
+  status=$?
+  set -e
+
+  assert_eq '1' "$status" "install_packages should fail when AUR packages are requested without an AUR helper"
+  assert_contains "$output" 'AUR packages require paru or yay: quickshell-git' "install_packages should explain the missing AUR helper"
+}
+
+test_install_packages_arch_uses_paru_for_aur_packages() {
+  local stub_dir="$TEST_TMPDIR/paru-stub"
+  local paru_log="$TEST_TMPDIR/paru.log"
+  local output
+
+  mkdir -p "$stub_dir"
+  cat > "$stub_dir/paru" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+for arg in "\$@"; do
+  printf '%s\n' "\$arg" >> "$paru_log"
+done
+EOF
+  chmod +x "$stub_dir/paru"
+
+  output=$((
+    aur_helper_for_arch() {
+      printf 'paru\n'
+    }
+    PATH="$stub_dir:$PATH" install_packages arch $'SUPPORTED_PACKAGES=\nAUR_PACKAGES=quickshell-git\nUNSUPPORTED_GROUPS='
+  ) 2>&1)
+
+  assert_contains "$output" 'Installing AUR packages with paru: quickshell-git' "install_packages should announce AUR helper usage"
+  assert_file_contains "$paru_log" '-S' "install_packages should invoke paru with -S"
+  assert_file_contains "$paru_log" 'quickshell-git' "install_packages should pass the AUR package to paru"
 }
 
 test_deploy_configs_creates_backup_and_active_includes() {
@@ -429,6 +477,10 @@ run_tests() {
   echo "ok - downloader unsupported urls"
   test_download_with_progress_uses_curl_progress_for_https_urls
   echo "ok - downloader https curl"
+  test_install_packages_arch_requires_aur_helper_for_aur_packages
+  echo "ok - aur helper required"
+  test_install_packages_arch_uses_paru_for_aur_packages
+  echo "ok - aur helper paru"
   test_deploy_configs_creates_backup_and_active_includes
   echo "ok - deploy configs"
   test_list_available_wallpapers_uses_builtin_manifest

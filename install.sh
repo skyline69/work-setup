@@ -493,10 +493,18 @@ packages_for_group() {
   "packages_for_group_${distro}" "$group"
 }
 
+aur_packages_for_group() {
+  local distro="$1"
+  local group="$2"
+
+  "aur_packages_for_group_${distro}" "$group"
+}
+
 resolve_package_plan() {
   local distro="$1"
   local groups_csv="$2"
   local -a supported_packages=()
+  local -a aur_packages=()
   local -a unsupported_groups=()
   local group
 
@@ -506,13 +514,32 @@ resolve_package_plan() {
         [[ -n "$pkg" ]] || continue
         supported_packages+=("$pkg")
       done < <(packages_for_group "$distro" "$group")
+      while IFS= read -r pkg; do
+        [[ -n "$pkg" ]] || continue
+        aur_packages+=("$pkg")
+      done < <(aur_packages_for_group "$distro" "$group")
     else
       unsupported_groups+=("$group")
     fi
   done < <(split_csv "$groups_csv")
 
   printf 'SUPPORTED_PACKAGES=%s\n' "$(printf '%s\n' "${supported_packages[@]}" | awk '!seen[$0]++' | join_by_space)"
+  printf 'AUR_PACKAGES=%s\n' "$(printf '%s\n' "${aur_packages[@]}" | awk '!seen[$0]++' | join_by_space)"
   printf 'UNSUPPORTED_GROUPS=%s\n' "$(printf '%s\n' "${unsupported_groups[@]}" | join_by_comma)"
+}
+
+aur_helper_for_arch() {
+  if command -v paru >/dev/null 2>&1; then
+    printf 'paru\n'
+    return 0
+  fi
+
+  if command -v yay >/dev/null 2>&1; then
+    printf 'yay\n'
+    return 0
+  fi
+
+  return 1
 }
 
 backup_path_for() {
@@ -696,11 +723,14 @@ package_manager_for() {
 install_packages() {
   local distro="$1"
   local package_plan="$2"
-  local packages_line unsupported_line
+  local packages_line aur_packages_line unsupported_line
   local package_manager
+  local aur_helper=''
   local -a packages=()
+  local -a aur_packages=()
 
   packages_line=$(awk -F= '$1 == "SUPPORTED_PACKAGES" { print $2 }' <<<"$package_plan")
+  aur_packages_line=$(awk -F= '$1 == "AUR_PACKAGES" { print $2 }' <<<"$package_plan")
   unsupported_line=$(awk -F= '$1 == "UNSUPPORTED_GROUPS" { print $2 }' <<<"$package_plan")
   package_manager=$(package_manager_for "$distro")
 
@@ -708,25 +738,55 @@ install_packages() {
     log WARN "Unsupported groups on $distro: $unsupported_line"
   fi
 
-  if [[ -z "$packages_line" ]]; then
-    log WARN "No supported packages resolved for $distro"
-    return 0
-  fi
-
-  read -r -a packages <<<"$packages_line"
+  [[ -n "$packages_line" ]] && read -r -a packages <<<"$packages_line"
+  [[ -n "$aur_packages_line" ]] && read -r -a aur_packages <<<"$aur_packages_line"
   if $DRY_RUN; then
-    log INFO "Dry run: $package_manager ${packages[*]}"
+    if [[ "${#packages[@]}" -gt 0 ]]; then
+      log INFO "Dry run: $package_manager ${packages[*]}"
+    fi
+    if [[ "$distro" == arch && "${#aur_packages[@]}" -gt 0 ]]; then
+      aur_helper=$(aur_helper_for_arch || true)
+      if [[ -z "$aur_helper" ]]; then
+        aur_helper='paru'
+      fi
+      log INFO "Dry run: $aur_helper ${aur_packages[*]}"
+    fi
+    if [[ "${#packages[@]}" -eq 0 && "${#aur_packages[@]}" -eq 0 ]]; then
+      log WARN "No supported packages resolved for $distro"
+    fi
     return 0
   fi
 
   case "$distro" in
     arch)
-      sudo pacman -S --needed --noconfirm "${packages[@]}"
+      if [[ "${#packages[@]}" -gt 0 ]]; then
+        log INFO "Installing pacman packages: ${packages[*]}"
+        sudo -v
+        sudo pacman -S --needed --noconfirm "${packages[@]}"
+      fi
+      if [[ "${#aur_packages[@]}" -gt 0 ]]; then
+        aur_helper=$(aur_helper_for_arch) || {
+          log ERROR "AUR packages require paru or yay: ${aur_packages[*]}" >&2
+          return 1
+        }
+        log INFO "Installing AUR packages with $aur_helper: ${aur_packages[*]}"
+        "$aur_helper" -S --needed --noconfirm "${aur_packages[@]}"
+      fi
       ;;
     fedora)
+      if [[ "${#packages[@]}" -eq 0 ]]; then
+        log WARN "No supported packages resolved for $distro"
+        return 0
+      fi
+      log INFO "Installing dnf packages: ${packages[*]}"
       sudo dnf install -y "${packages[@]}"
       ;;
     ubuntu)
+      if [[ "${#packages[@]}" -eq 0 ]]; then
+        log WARN "No supported packages resolved for $distro"
+        return 0
+      fi
+      log INFO "Installing apt packages: ${packages[*]}"
       sudo apt-get update
       sudo apt-get install -y "${packages[@]}"
       ;;

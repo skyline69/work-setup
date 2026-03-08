@@ -150,6 +150,34 @@ download_archive() {
   esac
 }
 
+download_with_progress() {
+  local source_url="$1"
+  local destination="$2"
+
+  case "$source_url" in
+    file://*)
+      cp "${source_url#file://}" "$destination"
+      ;;
+    /*)
+      cp "$source_url" "$destination"
+      ;;
+    http://*|https://*)
+      if command -v curl >/dev/null 2>&1; then
+        curl -fL# "$source_url" -o "$destination"
+      elif command -v wget >/dev/null 2>&1; then
+        wget --progress=bar:force:noscroll -O "$destination" "$source_url"
+      else
+        log ERROR "Neither curl nor wget is available for downloading $source_url" >&2
+        return 1
+      fi
+      ;;
+    *)
+      log ERROR "Unsupported download URL: $source_url" >&2
+      return 1
+      ;;
+  esac
+}
+
 wallpaper_url_for() {
   local wallpaper_basename="$1"
 
@@ -597,8 +625,11 @@ deploy_wallpapers() {
   local selection_file
   local selection_dir
   local selected_path
+  local staging_dir
   local wallpaper_basename
   local wallpaper_url
+  local index=0
+  local total
 
   if [[ -z "$selected_wallpaper" ]]; then
     log WARN "Skipping wallpaper deploy; no wallpaper selected"
@@ -608,21 +639,28 @@ deploy_wallpapers() {
   target_dir=$(wallpaper_target_dir_for "$target_home")
   selection_file=$(wallpaper_selection_file_for "$target_home")
   selection_dir=$(dirname "$selection_file")
+  total=$(list_available_wallpapers | sed '/^$/d' | wc -l | tr -d ' ')
 
   mkdir -p "$(dirname "$target_dir")" "$selection_dir"
-  backup_if_present "$target_dir"
-  mkdir -p "$target_dir"
+  staging_dir=$(mktemp -d)
+  trap 'rm -rf "$staging_dir"' RETURN
 
   while IFS= read -r wallpaper_basename; do
     [[ -n "$wallpaper_basename" ]] || continue
+    index=$((index + 1))
     wallpaper_url=$(wallpaper_url_for "$wallpaper_basename") || {
       log ERROR "Missing release asset URL for wallpaper: $wallpaper_basename" >&2
       return 1
     }
 
-    download_archive "$wallpaper_url" "$target_dir/$wallpaper_basename"
+    log INFO "Downloading wallpaper ${index}/${total}: $wallpaper_basename"
+    download_with_progress "$wallpaper_url" "$staging_dir/$wallpaper_basename"
+    log SUCCESS "Downloaded wallpaper ${index}/${total}: $wallpaper_basename"
   done < <(list_available_wallpapers)
 
+  backup_if_present "$target_dir"
+  mv "$staging_dir" "$target_dir"
+  trap - RETURN
   selected_path="$target_dir/$selected_wallpaper"
   [[ -f "$selected_path" ]] || {
     log ERROR "Selected wallpaper was not deployed: $selected_path" >&2

@@ -72,6 +72,13 @@ assert_file_contains() {
   assert_contains "$(cat "$path")" "$needle" "$message"
 }
 
+assert_file_equals() {
+  local path="$1"
+  local expected="$2"
+  local message="$3"
+  assert_eq "$expected" "$(cat "$path")" "$message"
+}
+
 test_detect_distro_from_os_release() {
   local os_release="$TEST_TMPDIR/os-release"
   cat > "$os_release" <<'EOS'
@@ -92,6 +99,69 @@ test_resolve_package_plan_includes_supported_and_unsupported() {
 
   output=$(resolve_package_plan ubuntu core,quickshell)
   assert_contains "$output" "UNSUPPORTED_GROUPS=quickshell" "ubuntu should mark quickshell unsupported"
+}
+
+test_download_with_progress_supports_file_urls() {
+  local source_file="$TEST_TMPDIR/source.txt"
+  local destination_file="$TEST_TMPDIR/destination.txt"
+
+  printf 'download me\n' > "$source_file"
+
+  download_with_progress "file://$source_file" "$destination_file"
+
+  assert_path_exists "$destination_file" "download_with_progress should write the destination file for file URLs"
+  assert_file_equals "$destination_file" 'download me' "download_with_progress should preserve file contents"
+}
+
+test_download_with_progress_rejects_unsupported_urls() {
+  local output
+  local status
+
+  set +e
+  output=$(download_with_progress 'ftp://example.com/file.gif' "$TEST_TMPDIR/ignored.txt" 2>&1)
+  status=$?
+  set -e
+
+  assert_eq '1' "$status" "download_with_progress should fail for unsupported URLs"
+  assert_contains "$output" 'Unsupported download URL: ftp://example.com/file.gif' "download_with_progress should explain unsupported URLs"
+}
+
+test_download_with_progress_uses_curl_progress_for_https_urls() {
+  local stub_dir="$TEST_TMPDIR/curl-stub"
+  local curl_log="$TEST_TMPDIR/curl.log"
+  local destination_file="$TEST_TMPDIR/https-destination.txt"
+
+  mkdir -p "$stub_dir"
+
+  cat > "$stub_dir/curl" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+log_file="$curl_log"
+output_path=""
+for arg in "\$@"; do
+  printf '%s\n' "\$arg" >> "\$log_file"
+done
+while [[ \$# -gt 0 ]]; do
+  case "\$1" in
+    -o)
+      output_path="\$2"
+      shift 2
+      ;;
+    *)
+      shift
+      ;;
+  esac
+done
+printf 'downloaded via curl\n' > "\$output_path"
+EOF
+  chmod +x "$stub_dir/curl"
+
+  PATH="$stub_dir:$PATH" download_with_progress 'https://example.com/file.gif' "$destination_file"
+
+  assert_path_exists "$destination_file" "download_with_progress should write the destination file for https URLs"
+  assert_file_equals "$destination_file" 'downloaded via curl' "download_with_progress should use the curl stub to create the downloaded file"
+  assert_file_contains "$curl_log" '-fL#' "download_with_progress should enable curl progress output for https URLs"
+  assert_file_contains "$curl_log" 'https://example.com/file.gif' "download_with_progress should pass the source URL to curl"
 }
 
 test_deploy_configs_creates_backup_and_active_includes() {
@@ -162,16 +232,19 @@ test_wallpaper_url_for_uses_release_assets() {
 test_deploy_wallpapers_downloads_assets_and_selection_file() {
   local fixture_dir="$TEST_TMPDIR/wallpaper-fixtures"
   local target_home="$TEST_TMPDIR/home"
+  local output
 
   mkdir -p "$fixture_dir"
   printf 'campfire\n' > "$fixture_dir/cozy-campfire-by-abi-toads.3840x2160.gif"
   printf 'zelda\n' > "$fixture_dir/zelda-pixel-art.3840x2160.gif"
 
-  WORK_SETUP_WALLPAPER_BASE_URL="file://$fixture_dir" deploy_wallpapers "$target_home" 'zelda-pixel-art.3840x2160.gif'
+  output=$(WORK_SETUP_WALLPAPER_BASE_URL="file://$fixture_dir" deploy_wallpapers "$target_home" 'zelda-pixel-art.3840x2160.gif' 2>&1)
 
   assert_path_exists "$target_home/.local/share/work-setup/wallpapers/cozy-campfire-by-abi-toads.3840x2160.gif" 'wallpaper deploy should install cozy campfire asset'
   assert_path_exists "$target_home/.local/share/work-setup/wallpapers/zelda-pixel-art.3840x2160.gif" 'wallpaper deploy should install zelda asset'
   assert_file_contains "$target_home/.config/work-setup/wallpaper.env" 'WORK_SETUP_WALLPAPER_BASENAME=zelda-pixel-art.3840x2160.gif' 'wallpaper deploy should persist the selected wallpaper basename'
+  assert_contains "$output" 'Downloading wallpaper 1/2: cozy-campfire-by-abi-toads.3840x2160.gif' 'wallpaper deploy should log the first wallpaper download start'
+  assert_contains "$output" 'Downloaded wallpaper 2/2: zelda-pixel-art.3840x2160.gif' 'wallpaper deploy should log the last wallpaper download completion'
 }
 
 test_main_dry_run_reports_wallpaper_selection() {
@@ -350,6 +423,12 @@ run_tests() {
   echo "ok - detect distro"
   test_resolve_package_plan_includes_supported_and_unsupported
   echo "ok - package plan"
+  test_download_with_progress_supports_file_urls
+  echo "ok - downloader file urls"
+  test_download_with_progress_rejects_unsupported_urls
+  echo "ok - downloader unsupported urls"
+  test_download_with_progress_uses_curl_progress_for_https_urls
+  echo "ok - downloader https curl"
   test_deploy_configs_creates_backup_and_active_includes
   echo "ok - deploy configs"
   test_list_available_wallpapers_uses_builtin_manifest

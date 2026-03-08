@@ -5,13 +5,13 @@ Unified Hyprland + Quickshell setup with one installer entrypoint.
 ## One-Line Install
 
 ```bash
-curl -fsSL https://github.com/skyline/work-setup/raw/branch/main/install.sh | bash -s -- --yes
+curl -fsSL https://raw.githubusercontent.com/skyline69/work-setup/main/install.sh | bash -s -- --yes
 ```
 
 Add your usual flags after `--`, for example:
 
 ```bash
-curl -fsSL https://github.com/skyline/work-setup/raw/branch/main/install.sh | bash -s -- --dry-run --distro arch --machine $(uname -n) --yes
+curl -fsSL https://raw.githubusercontent.com/skyline69/work-setup/main/install.sh | bash -s -- --dry-run --distro arch --machine $(uname -n) --yes
 ```
 
 ## Layout

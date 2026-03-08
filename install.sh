@@ -9,7 +9,7 @@ AUTO_CONFIRM=false
 DRY_RUN=false
 SELECTED_DISTRO="auto"
 SELECTED_GROUPS="$DEFAULT_GROUPS"
-DEFAULT_ARCHIVE_URL="https://github.com/skyline/work-setup/archive/main.tar.gz"
+DEFAULT_ARCHIVE_URL="https://github.com/skyline69/work-setup/archive/refs/heads/main.tar.gz"
 ARCHIVE_URL="${WORK_SETUP_ARCHIVE_URL:-}"
 
 bootstrap_log() {

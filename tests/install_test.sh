@@ -139,7 +139,14 @@ test_main_dry_run_skips_deploy() {
 test_default_archive_url_uses_repo_fallback() {
   local resolved
   WORK_SETUP_ARCHIVE_URL=''     resolved=$(default_archive_url)
-  assert_eq 'https://github.com/skyline/work-setup/archive/main.tar.gz' "$resolved" 'default archive URL should point at the GitHub repo archive'
+  assert_eq 'https://github.com/skyline69/work-setup/archive/refs/heads/main.tar.gz' "$resolved" 'default archive URL should point at the GitHub repo archive'
+}
+
+test_readme_uses_reachable_bootstrap_url() {
+  local readme
+  readme=$(cat "$ROOT_DIR/README.md")
+
+  assert_contains "$readme" 'https://raw.githubusercontent.com/skyline69/work-setup/main/install.sh' 'README should publish a reachable raw installer URL'
 }
 
 test_standalone_installer_bootstraps_from_archive() {
@@ -191,6 +198,8 @@ run_tests() {
   echo "ok - dry run"
   test_default_archive_url_uses_repo_fallback
   echo "ok - default archive url"
+  test_readme_uses_reachable_bootstrap_url
+  echo "ok - README bootstrap url"
   test_standalone_installer_bootstraps_from_archive
   echo "ok - standalone bootstrap"
   test_quickshell_installer_delegates_to_root_installer

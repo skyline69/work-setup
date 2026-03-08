@@ -1,7 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+SCRIPT_PATH="${BASH_SOURCE[0]-}"
+RUNNING_FROM_STDIN=false
+
+if [[ -n "$SCRIPT_PATH" && "$SCRIPT_PATH" != "bash" ]]; then
+  SCRIPT_DIR=$(cd "$(dirname "$SCRIPT_PATH")" && pwd)
+else
+  SCRIPT_DIR=$(pwd)
+  RUNNING_FROM_STDIN=true
+fi
+
 REPO_ROOT="$SCRIPT_DIR"
 DEFAULT_GROUPS="core,quickshell,fonts,media,wallpaper,apps"
 INSTALL_MODE="symlink"
@@ -52,6 +61,10 @@ default_archive_url() {
 }
 
 has_local_source_tree() {
+  if $RUNNING_FROM_STDIN; then
+    return 1
+  fi
+
   [[ -d "$SCRIPT_DIR/hypr" ]] && [[ -d "$SCRIPT_DIR/quickshell" ]] && [[ -f "$SCRIPT_DIR/scripts/packages/arch.sh" ]]
 }
 

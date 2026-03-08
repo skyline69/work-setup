@@ -181,6 +181,36 @@ EOS
   assert_contains "$output" 'bootstrap target ran with --archive-url file://' "standalone installer should re-exec extracted archive installer"
 }
 
+test_stdin_installer_bootstraps_from_archive() {
+  local fixture_root="$TEST_TMPDIR/stdin-archive-fixture/work-setup"
+  local archive_path="$TEST_TMPDIR/stdin-work-setup.tar.gz"
+  local output
+
+  mkdir -p "$fixture_root/hypr/machines/workstation" "$fixture_root/quickshell" "$fixture_root/scripts/packages" "$fixture_root/scripts"
+  cp "$ROOT_DIR/scripts/packages"/*.sh "$fixture_root/scripts/packages/"
+
+  cat > "$fixture_root/install.sh" <<'EOS'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'stdin fixture installer invoked\n'
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+exec "$SCRIPT_DIR/scripts/bootstrap-target.sh" "$@"
+EOS
+  chmod +x "$fixture_root/install.sh"
+
+  cat > "$fixture_root/scripts/bootstrap-target.sh" <<'EOS'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'stdin bootstrap target ran with %s\n' "$*"
+EOS
+  chmod +x "$fixture_root/scripts/bootstrap-target.sh"
+
+  tar -C "$TEST_TMPDIR/stdin-archive-fixture" -czf "$archive_path" work-setup
+
+  output=$(bash -s -- --archive-url "file://$archive_path" --dry-run --distro arch --machine workstation --yes < "$INSTALLER_PATH" 2>&1)
+  assert_contains "$output" 'stdin bootstrap target ran with --archive-url file://' "stdin installer should bootstrap from archive"
+}
+
 test_quickshell_installer_delegates_to_root_installer() {
   local output
   output=$(bash "$ROOT_DIR/quickshell/install.sh" --dry-run --distro arch --groups core --machine workstation --home "$TEST_TMPDIR/home" --yes 2>&1)
@@ -202,6 +232,8 @@ run_tests() {
   echo "ok - README bootstrap url"
   test_standalone_installer_bootstraps_from_archive
   echo "ok - standalone bootstrap"
+  test_stdin_installer_bootstraps_from_archive
+  echo "ok - stdin bootstrap"
   test_quickshell_installer_delegates_to_root_installer
   echo "ok - quickshell wrapper"
 }

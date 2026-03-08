@@ -21,8 +21,60 @@ SELECTED_GROUPS="$DEFAULT_GROUPS"
 DEFAULT_ARCHIVE_URL="https://github.com/skyline69/work-setup/archive/refs/heads/main.tar.gz"
 ARCHIVE_URL="${WORK_SETUP_ARCHIVE_URL:-}"
 
+COLOR_RESET=''
+COLOR_BOLD=''
+COLOR_INFO=''
+COLOR_WARN=''
+COLOR_ERROR=''
+COLOR_SUCCESS=''
+COLOR_ACCENT=''
+
+setup_colors() {
+  local use_color=false
+
+  if [[ -n "${NO_COLOR:-}" ]]; then
+    use_color=false
+  elif [[ -n "${FORCE_COLOR:-}" && "${FORCE_COLOR:-}" != "0" ]]; then
+    use_color=true
+  elif [[ -t 1 || -t 2 ]]; then
+    use_color=true
+  fi
+
+  if $use_color; then
+    COLOR_RESET=$'\033[0m'
+    COLOR_BOLD=$'\033[1m'
+    COLOR_INFO=$'\033[38;5;111m'
+    COLOR_WARN=$'\033[38;5;221m'
+    COLOR_ERROR=$'\033[38;5;203m'
+    COLOR_SUCCESS=$'\033[38;5;150m'
+    COLOR_ACCENT=$'\033[38;5;117m'
+  else
+    COLOR_RESET=''
+    COLOR_BOLD=''
+    COLOR_INFO=''
+    COLOR_WARN=''
+    COLOR_ERROR=''
+    COLOR_SUCCESS=''
+    COLOR_ACCENT=''
+  fi
+}
+
+style_for_level() {
+  case "$1" in
+    INFO) printf '%s' "$COLOR_INFO" ;;
+    WARN) printf '%s' "$COLOR_WARN" ;;
+    ERROR) printf '%s' "$COLOR_ERROR" ;;
+    SUCCESS) printf '%s' "$COLOR_SUCCESS" ;;
+    BOOTSTRAP) printf '%s' "$COLOR_ACCENT" ;;
+    *) printf '%s' "$COLOR_BOLD" ;;
+  esac
+}
+
 bootstrap_log() {
-  printf '[BOOTSTRAP] %s\n' "$1" >&2
+  local style
+  setup_colors
+  style=$(style_for_level BOOTSTRAP)
+  printf '%b[%s]%b %s\n' "${COLOR_BOLD}${style}" "BOOTSTRAP" "$COLOR_RESET" "$1" >&2
 }
 
 parse_archive_url_arg() {
@@ -152,8 +204,91 @@ source "$SCRIPT_DIR/scripts/packages/fedora.sh"
 source "$SCRIPT_DIR/scripts/packages/ubuntu.sh"
 
 log() {
-  printf '[%s] %s\n' "$1" "$2"
+  local level="$1"
+  local message="$2"
+  local style
+
+  setup_colors
+  style=$(style_for_level "$level")
+  printf '%b[%s]%b %s\n' "${COLOR_BOLD}${style}" "$level" "$COLOR_RESET" "$message"
 }
+
+print_banner() {
+  setup_colors
+  printf '\n'
+  printf '%b%s%b\n' "${COLOR_BOLD}${COLOR_ACCENT}" "== Work Setup Installer ==" "$COLOR_RESET"
+  printf '%s\n' "Hyprland + Quickshell bootstrap and config deploy"
+  printf '\n'
+}
+
+print_section() {
+  setup_colors
+  printf '\n%b%s%b\n' "${COLOR_BOLD}${COLOR_ACCENT}" "$1" "$COLOR_RESET"
+}
+
+format_csv_as_list() {
+  local csv="$1"
+
+  if [[ -z "$csv" ]]; then
+    printf 'none'
+    return 0
+  fi
+
+  awk -v csv="$csv" 'BEGIN {
+    n = split(csv, parts, ",")
+    for (i = 1; i <= n; i++) {
+      if (parts[i] == "") {
+        continue
+      }
+      if (printed > 0) {
+        printf ", "
+      }
+      printf "%s", parts[i]
+      printed++
+    }
+    if (printed == 0) {
+      printf "none"
+    }
+  }'
+}
+
+print_package_summary() {
+  local distro="$1"
+  local groups_csv="$2"
+  local package_plan="$3"
+  local packages_line unsupported_line
+
+  packages_line=$(awk -F= '$1 == "SUPPORTED_PACKAGES" { print $2 }' <<<"$package_plan")
+  unsupported_line=$(awk -F= '$1 == "UNSUPPORTED_GROUPS" { print $2 }' <<<"$package_plan")
+
+  print_section "Package Summary"
+  printf 'Distro: %s\n' "$distro"
+  printf 'Groups: %s\n' "$(format_csv_as_list "$groups_csv")"
+  printf 'Supported packages: %s\n' "${packages_line:-none}"
+  printf 'Unsupported groups: %s\n' "$(format_csv_as_list "$unsupported_line")"
+}
+
+confirm_installation() {
+  local reply
+
+  print_section "Ready To Install"
+  printf 'Continue with package installation and config deployment? [y/N]: '
+  if ! read -r reply; then
+    printf '\n'
+    log WARN "Cancelled because confirmation was not received"
+    return 1
+  fi
+
+  [[ "$reply" =~ ^[Yy]$ ]]
+}
+
+handle_interrupt() {
+  printf '\n'
+  log WARN "Installation cancelled by Ctrl+C"
+  exit 130
+}
+
+trap handle_interrupt INT
 
 detect_distro() {
   local os_release="${1:-/etc/os-release}"
@@ -458,16 +593,16 @@ main() {
     SELECTED_DISTRO=$(detect_distro)
   fi
 
+  print_banner
   log INFO "Resolving package plan for distro=$SELECTED_DISTRO groups=$SELECTED_GROUPS"
   package_plan=$(resolve_package_plan "$SELECTED_DISTRO" "$SELECTED_GROUPS")
-  printf '%s\n' "$package_plan"
+  print_package_summary "$SELECTED_DISTRO" "$SELECTED_GROUPS" "$package_plan"
 
   if ! $AUTO_CONFIRM && ! $DRY_RUN; then
-    read -r -p "Proceed with package installation and config deployment? [y/N] " reply
-    [[ "$reply" =~ ^[Yy]$ ]] || {
-      log INFO "Aborted"
+    if ! confirm_installation; then
+      log INFO "Cancelled by user choice"
       return 0
-    }
+    fi
   fi
 
   install_packages "$SELECTED_DISTRO" "$package_plan"
@@ -478,7 +613,7 @@ main() {
 
   deploy_configs "$REPO_ROOT" "$target_home" "$machine_name" "$INSTALL_MODE"
 
-  log INFO "Install complete"
+  log SUCCESS "Install complete"
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then

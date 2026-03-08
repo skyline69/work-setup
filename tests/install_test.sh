@@ -41,6 +41,15 @@ assert_contains() {
   fi
 }
 
+assert_not_contains() {
+  local haystack="$1"
+  local needle="$2"
+  local message="$3"
+  if [[ "$haystack" == *"$needle"* ]]; then
+    fail "$message: unexpectedly found '$needle' in '$haystack'"
+  fi
+}
+
 assert_path_exists() {
   local path="$1"
   local message="$2"
@@ -117,15 +126,17 @@ EOS
 test_main_dry_run_skips_deploy() {
   local calls_file="$TEST_TMPDIR/calls.log"
 
-  install_packages() {
-    echo "install:$*" >> "$calls_file"
-  }
+  (
+    install_packages() {
+      echo "install:$*" >> "$calls_file"
+    }
 
-  deploy_configs() {
-    echo "deploy:$*" >> "$calls_file"
-  }
+    deploy_configs() {
+      echo "deploy:$*" >> "$calls_file"
+    }
 
-  installer_main --dry-run --distro arch --groups core --machine workstation --home "$TEST_TMPDIR/home"
+    installer_main --dry-run --distro arch --groups core --machine workstation --home "$TEST_TMPDIR/home"
+  )
 
   assert_path_exists "$calls_file" "dry-run should still resolve package installation"
   assert_contains "$(cat "$calls_file")" "install:arch" "dry-run should report package installation plan"
@@ -147,6 +158,45 @@ test_readme_uses_reachable_bootstrap_url() {
   readme=$(cat "$ROOT_DIR/README.md")
 
   assert_contains "$readme" 'https://raw.githubusercontent.com/skyline69/work-setup/main/install.sh' 'README should publish a reachable raw installer URL'
+}
+
+test_colorized_log_output_can_be_enabled() {
+  local output
+  local had_no_color=false
+  local original_no_color=''
+
+  if [[ -n "${NO_COLOR+x}" ]]; then
+    had_no_color=true
+    original_no_color="$NO_COLOR"
+    unset NO_COLOR
+  fi
+
+  FORCE_COLOR=1
+  output=$(log INFO "Styled message")
+  unset FORCE_COLOR
+  if $had_no_color; then
+    NO_COLOR="$original_no_color"
+  fi
+  assert_contains "$output" $'\033[' 'log output should include ANSI escapes when color is forced'
+  assert_contains "$output" 'Styled message' 'log output should include the message body'
+}
+
+test_main_dry_run_uses_human_friendly_summary() {
+  local output
+
+  output=$(installer_main --dry-run --distro arch --groups core,quickshell --machine workstation --home "$TEST_TMPDIR/home" --yes 2>&1)
+  assert_contains "$output" 'Work Setup Installer' 'installer should print a startup banner'
+  assert_contains "$output" 'Package Summary' 'installer should print a labeled package summary'
+  assert_contains "$output" 'Supported packages:' 'installer should render supported packages in user-facing language'
+  assert_not_contains "$output" 'SUPPORTED_PACKAGES=' 'installer should not print raw package-plan variables'
+}
+
+test_interactive_prompt_is_styled() {
+  local output
+
+  output=$(printf 'n\n' | installer_main --distro arch --groups core --machine workstation --home "$TEST_TMPDIR/home" 2>&1)
+  assert_contains "$output" 'Continue with package installation and config deployment?' 'interactive prompt should use the richer confirmation text'
+  assert_contains "$output" 'Cancelled by user choice' 'installer should acknowledge user cancellation clearly'
 }
 
 test_standalone_installer_bootstraps_from_archive() {
@@ -211,6 +261,25 @@ EOS
   assert_contains "$output" 'stdin bootstrap target ran with --archive-url file://' "stdin installer should bootstrap from archive"
 }
 
+test_sigint_during_prompt_exits_cleanly() {
+  local output_file="$TEST_TMPDIR/sigint-output.log"
+  local fifo="$TEST_TMPDIR/sigint-input.fifo"
+  local status
+
+  mkfifo "$fifo"
+  exec 3<>"$fifo"
+
+  set +e
+  timeout --preserve-status -s INT 0.2 bash "$INSTALLER_PATH" --distro arch --groups core --machine workstation --home "$TEST_TMPDIR/home" < "$fifo" >"$output_file" 2>&1
+  status=$?
+  set -e
+
+  exec 3>&-
+
+  assert_eq '130' "$status" 'installer should exit with 130 when interrupted'
+  assert_contains "$(cat "$output_file")" 'Installation cancelled by Ctrl+C' 'installer should print a dedicated interrupt message'
+}
+
 test_quickshell_installer_delegates_to_root_installer() {
   local output
   output=$(bash "$ROOT_DIR/quickshell/install.sh" --dry-run --distro arch --groups core --machine workstation --home "$TEST_TMPDIR/home" --yes 2>&1)
@@ -230,10 +299,18 @@ run_tests() {
   echo "ok - default archive url"
   test_readme_uses_reachable_bootstrap_url
   echo "ok - README bootstrap url"
+  test_colorized_log_output_can_be_enabled
+  echo "ok - colorized log output"
+  test_main_dry_run_uses_human_friendly_summary
+  echo "ok - human friendly summary"
+  test_interactive_prompt_is_styled
+  echo "ok - styled prompt"
   test_standalone_installer_bootstraps_from_archive
   echo "ok - standalone bootstrap"
   test_stdin_installer_bootstraps_from_archive
   echo "ok - stdin bootstrap"
+  test_sigint_during_prompt_exits_cleanly
+  echo "ok - sigint handler"
   test_quickshell_installer_delegates_to_root_installer
   echo "ok - quickshell wrapper"
 }

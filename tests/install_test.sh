@@ -139,7 +139,7 @@ test_main_dry_run_skips_deploy() {
 test_default_archive_url_uses_repo_fallback() {
   local resolved
   WORK_SETUP_ARCHIVE_URL=''     resolved=$(default_archive_url)
-  assert_eq 'https://codeberg.org/skyline/work-setup/archive/main.tar.gz' "$resolved" 'default archive URL should point at the Codeberg repo archive'
+  assert_eq 'https://github.com/skyline/work-setup/archive/main.tar.gz' "$resolved" 'default archive URL should point at the GitHub repo archive'
 }
 
 test_standalone_installer_bootstraps_from_archive() {

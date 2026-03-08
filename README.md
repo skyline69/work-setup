@@ -5,13 +5,13 @@ Unified Hyprland + Quickshell setup with one installer entrypoint.
 ## One-Line Install
 
 ```bash
-curl -fsSL https://codeberg.org/skyline/work-setup/raw/branch/main/install.sh | bash -s -- --yes
+curl -fsSL https://github.com/skyline/work-setup/raw/branch/main/install.sh | bash -s -- --yes
 ```
 
 Add your usual flags after `--`, for example:
 
 ```bash
-curl -fsSL https://codeberg.org/skyline/work-setup/raw/branch/main/install.sh | bash -s -- --dry-run --distro arch --machine $(uname -n) --yes
+curl -fsSL https://github.com/skyline/work-setup/raw/branch/main/install.sh | bash -s -- --dry-run --distro arch --machine $(uname -n) --yes
 ```
 
 ## Layout
@@ -40,7 +40,7 @@ Useful flags:
 
 ## Standalone Bootstrap Usage
 
-If you only have `install.sh`, it defaults to the Codeberg archive for this repo. You can still override that source with `--archive-url` or `WORK_SETUP_ARCHIVE_URL`.
+If you only have `install.sh`, it defaults to the GitHub archive for this repo. You can still override that source with `--archive-url` or `WORK_SETUP_ARCHIVE_URL`.
 
 ```bash
 bash install.sh --archive-url https://example.com/work-setup.tar.gz --dry-run --distro arch --machine $(uname -n) --yes

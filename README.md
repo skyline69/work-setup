@@ -34,9 +34,12 @@ bash install.sh --distro arch --machine $(uname -n) --yes
 Useful flags:
 
 - `--groups core,quickshell,fonts,media,wallpaper,apps`
+- `--wallpaper cozy-campfire-by-abi-toads.3840x2160.gif`
 - `--no-quickshell`
 - `--copy` or `--symlink`
 - `--home /path/to/home`
+
+When the `wallpaper` group is enabled, the installer downloads the wallpaper assets from the GitHub release for this repo into `~/.local/share/work-setup/wallpapers` and asks which wallpaper to use during interactive installs. Unattended runs default to `cozy-campfire-by-abi-toads.3840x2160.gif` unless `--wallpaper` is provided.
 
 ## Standalone Bootstrap Usage
 

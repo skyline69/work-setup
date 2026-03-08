@@ -65,6 +65,13 @@ assert_symlink_target() {
   assert_eq "$expected" "$actual" "$message"
 }
 
+assert_file_contains() {
+  local path="$1"
+  local needle="$2"
+  local message="$3"
+  assert_contains "$(cat "$path")" "$needle" "$message"
+}
+
 test_detect_distro_from_os_release() {
   local os_release="$TEST_TMPDIR/os-release"
   cat > "$os_release" <<'EOS'
@@ -121,6 +128,58 @@ EOS
   assert_symlink_target "$target_home/.config/quickshell" "$repo_root/quickshell" "deploy should symlink quickshell config"
   assert_path_exists "$repo_root/hypr/active/monitors.conf" "deploy should create active includes"
   assert_contains "$(cat "$repo_root/hypr/active/monitors.conf")" 'source = ~/.config/hypr/machines/workstation/monitors.conf' "active include should point at selected machine"
+}
+
+test_list_available_wallpapers_uses_builtin_manifest() {
+  local wallpapers
+
+  wallpapers=$(list_available_wallpapers)
+  assert_contains "$wallpapers" 'cozy-campfire-by-abi-toads.3840x2160.gif' 'wallpaper discovery should include cozy campfire'
+  assert_contains "$wallpapers" 'zelda-pixel-art.3840x2160.gif' 'wallpaper discovery should include zelda pixel art'
+}
+
+test_default_wallpaper_selection_prefers_cozy_campfire() {
+  local selected
+
+  selected=$(default_wallpaper_basename)
+  assert_eq 'cozy-campfire-by-abi-toads.3840x2160.gif' "$selected" 'default wallpaper should preserve the current cozy campfire behavior'
+}
+
+test_prompt_for_wallpaper_choice_accepts_numeric_selection() {
+  local selected
+
+  selected=$(printf '2\n' | prompt_for_wallpaper_choice 'cozy-campfire-by-abi-toads.3840x2160.gif')
+  assert_eq 'zelda-pixel-art.3840x2160.gif' "$selected" 'wallpaper prompt should return the chosen numeric selection'
+}
+
+test_wallpaper_url_for_uses_release_assets() {
+  local url
+
+  url=$(wallpaper_url_for 'cozy-campfire-by-abi-toads.3840x2160.gif')
+  assert_eq 'https://github.com/skyline69/work-setup/releases/download/stuff/cozy-campfire-by-abi-toads.3840x2160.gif' "$url" 'cozy campfire should resolve to the release asset URL'
+}
+
+test_deploy_wallpapers_downloads_assets_and_selection_file() {
+  local fixture_dir="$TEST_TMPDIR/wallpaper-fixtures"
+  local target_home="$TEST_TMPDIR/home"
+
+  mkdir -p "$fixture_dir"
+  printf 'campfire\n' > "$fixture_dir/cozy-campfire-by-abi-toads.3840x2160.gif"
+  printf 'zelda\n' > "$fixture_dir/zelda-pixel-art.3840x2160.gif"
+
+  WORK_SETUP_WALLPAPER_BASE_URL="file://$fixture_dir" deploy_wallpapers "$target_home" 'zelda-pixel-art.3840x2160.gif'
+
+  assert_path_exists "$target_home/.local/share/work-setup/wallpapers/cozy-campfire-by-abi-toads.3840x2160.gif" 'wallpaper deploy should install cozy campfire asset'
+  assert_path_exists "$target_home/.local/share/work-setup/wallpapers/zelda-pixel-art.3840x2160.gif" 'wallpaper deploy should install zelda asset'
+  assert_file_contains "$target_home/.config/work-setup/wallpaper.env" 'WORK_SETUP_WALLPAPER_BASENAME=zelda-pixel-art.3840x2160.gif' 'wallpaper deploy should persist the selected wallpaper basename'
+}
+
+test_main_dry_run_reports_wallpaper_selection() {
+  local output
+
+  output=$(installer_main --dry-run --distro arch --groups wallpaper --machine workstation --home "$TEST_TMPDIR/home" --yes 2>&1)
+  assert_contains "$output" 'Selected wallpaper:' 'installer summary should mention wallpaper selection'
+  assert_contains "$output" 'cozy-campfire-by-abi-toads.3840x2160.gif' 'installer should default to the cozy wallpaper during unattended dry runs'
 }
 
 test_main_dry_run_skips_deploy() {
@@ -293,8 +352,20 @@ run_tests() {
   echo "ok - package plan"
   test_deploy_configs_creates_backup_and_active_includes
   echo "ok - deploy configs"
+  test_list_available_wallpapers_uses_builtin_manifest
+  echo "ok - list wallpapers"
+  test_default_wallpaper_selection_prefers_cozy_campfire
+  echo "ok - default wallpaper selection"
+  test_prompt_for_wallpaper_choice_accepts_numeric_selection
+  echo "ok - prompt wallpaper choice"
+  test_wallpaper_url_for_uses_release_assets
+  echo "ok - wallpaper release url"
+  test_deploy_wallpapers_downloads_assets_and_selection_file
+  echo "ok - deploy wallpapers"
   test_main_dry_run_skips_deploy
   echo "ok - dry run"
+  test_main_dry_run_reports_wallpaper_selection
+  echo "ok - wallpaper summary"
   test_default_archive_url_uses_repo_fallback
   echo "ok - default archive url"
   test_readme_uses_reachable_bootstrap_url

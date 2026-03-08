@@ -18,8 +18,10 @@ AUTO_CONFIRM=false
 DRY_RUN=false
 SELECTED_DISTRO="auto"
 SELECTED_GROUPS="$DEFAULT_GROUPS"
+SELECTED_WALLPAPER=''
 DEFAULT_ARCHIVE_URL="https://github.com/skyline69/work-setup/archive/refs/heads/main.tar.gz"
 ARCHIVE_URL="${WORK_SETUP_ARCHIVE_URL:-}"
+DEFAULT_WALLPAPER_BASENAME='cozy-campfire-by-abi-toads.3840x2160.gif'
 
 COLOR_RESET=''
 COLOR_BOLD=''
@@ -148,6 +150,27 @@ download_archive() {
   esac
 }
 
+wallpaper_url_for() {
+  local wallpaper_basename="$1"
+
+  if [[ -n "${WORK_SETUP_WALLPAPER_BASE_URL:-}" ]]; then
+    printf '%s/%s\n' "${WORK_SETUP_WALLPAPER_BASE_URL%/}" "$wallpaper_basename"
+    return 0
+  fi
+
+  case "$wallpaper_basename" in
+    cozy-campfire-by-abi-toads.3840x2160.gif)
+      printf '%s\n' 'https://github.com/skyline69/work-setup/releases/download/stuff/cozy-campfire-by-abi-toads.3840x2160.gif'
+      ;;
+    zelda-pixel-art.3840x2160.gif)
+      printf '%s\n' 'https://github.com/skyline69/work-setup/releases/download/stuff/zelda-pixel-art.3840x2160.gif'
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
 find_extracted_repo_root() {
   local search_root="$1"
   local candidate
@@ -256,6 +279,7 @@ print_package_summary() {
   local distro="$1"
   local groups_csv="$2"
   local package_plan="$3"
+  local selected_wallpaper="${4:-}"
   local packages_line unsupported_line
 
   packages_line=$(awk -F= '$1 == "SUPPORTED_PACKAGES" { print $2 }' <<<"$package_plan")
@@ -266,6 +290,9 @@ print_package_summary() {
   printf 'Groups: %s\n' "$(format_csv_as_list "$groups_csv")"
   printf 'Supported packages: %s\n' "${packages_line:-none}"
   printf 'Unsupported groups: %s\n' "$(format_csv_as_list "$unsupported_line")"
+  if [[ -n "$selected_wallpaper" ]]; then
+    printf 'Selected wallpaper: %s\n' "$selected_wallpaper"
+  fi
 }
 
 confirm_installation() {
@@ -306,6 +333,114 @@ detect_distro() {
 split_csv() {
   local csv="$1"
   tr ',' '\n' <<<"$csv" | sed '/^$/d'
+}
+
+csv_has_value() {
+  local csv="$1"
+  local expected="$2"
+  local entry
+
+  while IFS= read -r entry; do
+    [[ "$entry" == "$expected" ]] && return 0
+  done < <(split_csv "$csv")
+
+  return 1
+}
+
+list_available_wallpapers() {
+  printf '%s\n' \
+    'cozy-campfire-by-abi-toads.3840x2160.gif' \
+    'zelda-pixel-art.3840x2160.gif'
+}
+
+wallpaper_exists() {
+  local wallpaper_basename="$1"
+
+  list_available_wallpapers | grep -Fxq "$wallpaper_basename"
+}
+
+default_wallpaper_basename() {
+  local fallback
+
+  if wallpaper_exists "$DEFAULT_WALLPAPER_BASENAME"; then
+    printf '%s\n' "$DEFAULT_WALLPAPER_BASENAME"
+    return 0
+  fi
+
+  fallback=$(list_available_wallpapers | head -n 1 || true)
+  if [[ -n "$fallback" ]]; then
+    printf '%s\n' "$fallback"
+  fi
+}
+
+prompt_for_wallpaper_choice() {
+  local default_wallpaper="$1"
+  local reply index
+  local -a wallpapers=()
+
+  mapfile -t wallpapers < <(list_available_wallpapers)
+  if [[ "${#wallpapers[@]}" -eq 0 ]]; then
+    return 0
+  fi
+
+  while true; do
+    setup_colors
+    printf '\n%b%s%b\n' "${COLOR_BOLD}${COLOR_ACCENT}" "Wallpaper Choice" "$COLOR_RESET" >&2
+    for index in "${!wallpapers[@]}"; do
+      if [[ "${wallpapers[$index]}" == "$default_wallpaper" ]]; then
+        printf '%s. %s (default)\n' "$((index + 1))" "${wallpapers[$index]}" >&2
+      else
+        printf '%s. %s\n' "$((index + 1))" "${wallpapers[$index]}" >&2
+      fi
+    done
+
+    printf 'Selection [1-%s, Enter for default]: ' "${#wallpapers[@]}" >&2
+    if ! read -r reply; then
+      printf '\n' >&2
+      printf '%s\n' "$default_wallpaper"
+      return 0
+    fi
+
+    if [[ -z "$reply" ]]; then
+      printf '%s\n' "$default_wallpaper"
+      return 0
+    fi
+
+    if [[ "$reply" =~ ^[0-9]+$ ]] && (( reply >= 1 && reply <= ${#wallpapers[@]} )); then
+      printf '%s\n' "${wallpapers[$((reply - 1))]}"
+      return 0
+    fi
+
+    printf 'Invalid selection. Choose a number between 1 and %s.\n' "${#wallpapers[@]}" >&2
+  done
+}
+
+resolve_selected_wallpaper() {
+  local requested_wallpaper="$1"
+  local prompt_for_choice="$2"
+  local default_wallpaper
+
+  default_wallpaper=$(default_wallpaper_basename)
+  if [[ -z "$default_wallpaper" ]]; then
+    return 0
+  fi
+
+  if [[ -n "$requested_wallpaper" ]]; then
+    if ! wallpaper_exists "$requested_wallpaper"; then
+      log ERROR "Unknown wallpaper: $requested_wallpaper" >&2
+      return 1
+    fi
+
+    printf '%s\n' "$requested_wallpaper"
+    return 0
+  fi
+
+  if $prompt_for_choice; then
+    prompt_for_wallpaper_choice "$default_wallpaper"
+    return 0
+  fi
+
+  printf '%s\n' "$default_wallpaper"
 }
 
 join_by_space() {
@@ -445,6 +580,64 @@ deploy_configs() {
   fi
 }
 
+wallpaper_target_dir_for() {
+  local target_home="$1"
+  printf '%s/.local/share/work-setup/wallpapers\n' "$target_home"
+}
+
+wallpaper_selection_file_for() {
+  local target_home="$1"
+  printf '%s/.config/work-setup/wallpaper.env\n' "$target_home"
+}
+
+deploy_wallpapers() {
+  local target_home="$1"
+  local selected_wallpaper="$2"
+  local target_dir
+  local selection_file
+  local selection_dir
+  local selected_path
+  local wallpaper_basename
+  local wallpaper_url
+
+  if [[ -z "$selected_wallpaper" ]]; then
+    log WARN "Skipping wallpaper deploy; no wallpaper selected"
+    return 0
+  fi
+
+  target_dir=$(wallpaper_target_dir_for "$target_home")
+  selection_file=$(wallpaper_selection_file_for "$target_home")
+  selection_dir=$(dirname "$selection_file")
+
+  mkdir -p "$(dirname "$target_dir")" "$selection_dir"
+  backup_if_present "$target_dir"
+  mkdir -p "$target_dir"
+
+  while IFS= read -r wallpaper_basename; do
+    [[ -n "$wallpaper_basename" ]] || continue
+    wallpaper_url=$(wallpaper_url_for "$wallpaper_basename") || {
+      log ERROR "Missing release asset URL for wallpaper: $wallpaper_basename" >&2
+      return 1
+    }
+
+    download_archive "$wallpaper_url" "$target_dir/$wallpaper_basename"
+  done < <(list_available_wallpapers)
+
+  selected_path="$target_dir/$selected_wallpaper"
+  [[ -f "$selected_path" ]] || {
+    log ERROR "Selected wallpaper was not deployed: $selected_path" >&2
+    return 1
+  }
+
+  cat > "$selection_file" <<EOF
+WORK_SETUP_WALLPAPER_BASENAME=$(printf '%q' "$selected_wallpaper")
+WORK_SETUP_WALLPAPER_PATH=$(printf '%q' "$selected_path")
+EOF
+
+  log INFO "Installed wallpapers to $target_dir"
+  log INFO "Selected wallpaper: $selected_wallpaper"
+}
+
 package_manager_for() {
   case "$1" in
     arch)
@@ -510,6 +703,7 @@ Options:
   --archive-url <url-or-file>
   --distro <auto|arch|fedora|ubuntu>
   --groups <comma-separated groups>
+  --wallpaper <basename>
   --no-quickshell
   --copy
   --symlink
@@ -529,6 +723,8 @@ main() {
   local target_home="$HOME"
   local arg
   local package_plan
+  local wallpaper_selected=false
+  local prompt_for_wallpaper=false
 
   while [[ $# -gt 0 ]]; do
     arg="$1"
@@ -548,6 +744,14 @@ main() {
       --groups)
         SELECTED_GROUPS="$2"
         shift 2
+        ;;
+      --wallpaper)
+        SELECTED_WALLPAPER="$2"
+        shift 2
+        ;;
+      --wallpaper=*)
+        SELECTED_WALLPAPER="${arg#--wallpaper=}"
+        shift
         ;;
       --no-quickshell)
         SELECTED_GROUPS=$(split_csv "$SELECTED_GROUPS" | grep -vx 'quickshell' | join_by_comma || true)
@@ -594,9 +798,19 @@ main() {
   fi
 
   print_banner
+
+  if csv_has_value "$SELECTED_GROUPS" wallpaper; then
+    wallpaper_selected=true
+    if ! $AUTO_CONFIRM; then
+      prompt_for_wallpaper=true
+    fi
+
+    SELECTED_WALLPAPER=$(resolve_selected_wallpaper "$SELECTED_WALLPAPER" "$prompt_for_wallpaper")
+  fi
+
   log INFO "Resolving package plan for distro=$SELECTED_DISTRO groups=$SELECTED_GROUPS"
   package_plan=$(resolve_package_plan "$SELECTED_DISTRO" "$SELECTED_GROUPS")
-  print_package_summary "$SELECTED_DISTRO" "$SELECTED_GROUPS" "$package_plan"
+  print_package_summary "$SELECTED_DISTRO" "$SELECTED_GROUPS" "$package_plan" "$SELECTED_WALLPAPER"
 
   if ! $AUTO_CONFIRM && ! $DRY_RUN; then
     if ! confirm_installation; then
@@ -607,11 +821,17 @@ main() {
 
   install_packages "$SELECTED_DISTRO" "$package_plan"
   if $DRY_RUN; then
+    if $wallpaper_selected && [[ -n "$SELECTED_WALLPAPER" ]]; then
+      log INFO "Dry run: would install wallpapers to $(wallpaper_target_dir_for "$target_home")"
+    fi
     log INFO "Dry run: skipping config deployment"
     return 0
   fi
 
   deploy_configs "$REPO_ROOT" "$target_home" "$machine_name" "$INSTALL_MODE"
+  if $wallpaper_selected; then
+    deploy_wallpapers "$target_home" "$SELECTED_WALLPAPER"
+  fi
 
   log SUCCESS "Install complete"
 }

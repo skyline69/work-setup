@@ -114,8 +114,45 @@ default_archive_url() {
 ' "$DEFAULT_ARCHIVE_URL"
 }
 
+tty_input_path() {
+  printf '%s\n' "${WORK_SETUP_TTY_PATH:-/dev/tty}"
+}
+
+open_tty_input_fd() {
+  local tty_path="$1"
+
+  exec {TTY_INPUT_FD}<"$tty_path" 2>/dev/null || return 1
+}
+
+close_tty_input_fd() {
+  if [[ -n "${TTY_INPUT_FD:-}" ]]; then
+    exec {TTY_INPUT_FD}<&-
+    TTY_INPUT_FD=''
+  fi
+}
+
+run_with_terminal_input() {
+  local tty_path status
+  tty_path=$(tty_input_path)
+
+  if [[ -t 0 ]]; then
+    "$@"
+    return $?
+  fi
+
+  if open_tty_input_fd "$tty_path"; then
+    "$@" <&"$TTY_INPUT_FD"
+    status=$?
+    close_tty_input_fd
+    return $status
+  fi
+
+  "$@"
+}
+
 restore_bootstrap_stdin_if_needed() {
-  local tty_path="${WORK_SETUP_TTY_PATH:-/dev/tty}"
+  local tty_path
+  tty_path=$(tty_input_path)
 
   if [[ -t 0 ]]; then
     return 0
@@ -125,12 +162,13 @@ restore_bootstrap_stdin_if_needed() {
     return 0
   fi
 
-  if [[ ! -r "$tty_path" ]]; then
+  if ! open_tty_input_fd "$tty_path"; then
     return 0
   fi
 
   bootstrap_log "Restoring stdin from $tty_path for interactive commands"
-  exec < "$tty_path"
+  exec <&"$TTY_INPUT_FD"
+  close_tty_input_fd
 }
 
 has_local_source_tree() {
@@ -562,6 +600,11 @@ aur_helper_for_arch() {
   return 1
 }
 
+ensure_sudo_credentials() {
+  log INFO "Authentication required. If prompted, enter your sudo password; input is hidden."
+  run_with_terminal_input sudo -p '[sudo] password for %u (input hidden): ' -v
+}
+
 backup_path_for() {
   local path="$1"
   local backup="${path}.backup"
@@ -781,8 +824,8 @@ install_packages() {
     arch)
       if [[ "${#packages[@]}" -gt 0 ]]; then
         log INFO "Installing pacman packages: ${packages[*]}"
-        sudo -v
-        sudo pacman -S --needed --noconfirm "${packages[@]}"
+        ensure_sudo_credentials
+        run_with_terminal_input sudo pacman -S --needed --noconfirm "${packages[@]}"
       fi
       if [[ "${#aur_packages[@]}" -gt 0 ]]; then
         aur_helper=$(aur_helper_for_arch) || {
@@ -790,7 +833,7 @@ install_packages() {
           return 1
         }
         log INFO "Installing AUR packages with $aur_helper: ${aur_packages[*]}"
-        "$aur_helper" -S --needed --noconfirm "${aur_packages[@]}"
+        run_with_terminal_input "$aur_helper" -S --needed --noconfirm "${aur_packages[@]}"
       fi
       ;;
     fedora)
@@ -799,7 +842,8 @@ install_packages() {
         return 0
       fi
       log INFO "Installing dnf packages: ${packages[*]}"
-      sudo dnf install -y "${packages[@]}"
+      ensure_sudo_credentials
+      run_with_terminal_input sudo dnf install -y "${packages[@]}"
       ;;
     ubuntu)
       if [[ "${#packages[@]}" -eq 0 ]]; then
@@ -807,8 +851,9 @@ install_packages() {
         return 0
       fi
       log INFO "Installing apt packages: ${packages[*]}"
-      sudo apt-get update
-      sudo apt-get install -y "${packages[@]}"
+      ensure_sudo_credentials
+      run_with_terminal_input sudo apt-get update
+      run_with_terminal_input sudo apt-get install -y "${packages[@]}"
       ;;
   esac
 }

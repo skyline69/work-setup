@@ -167,6 +167,17 @@ EOF
   assert_file_contains "$curl_log" 'https://example.com/file.gif' "download_with_progress should pass the source URL to curl"
 }
 
+test_run_with_terminal_input_restores_stdin_from_tty_path() {
+  local tty_input="$TEST_TMPDIR/tty-input.txt"
+  local output
+
+  printf 'terminal line\n' > "$tty_input"
+
+  output=$(WORK_SETUP_TTY_PATH="$tty_input" run_with_terminal_input bash -lc 'read -r line; printf "%s\n" "$line"' </dev/null)
+
+  assert_eq 'terminal line' "$output" "run_with_terminal_input should restore stdin from the tty path when stdin is unavailable"
+}
+
 test_install_packages_arch_requires_aur_helper_for_aur_packages() {
   local output
   local status
@@ -183,6 +194,22 @@ test_install_packages_arch_requires_aur_helper_for_aur_packages() {
 
   assert_eq '1' "$status" "install_packages should fail when AUR packages are requested without an AUR helper"
   assert_contains "$output" 'AUR packages require paru or yay: quickshell-git' "install_packages should explain the missing AUR helper"
+}
+
+test_install_packages_arch_announces_hidden_sudo_prompt() {
+  local output
+
+  output=$((
+    run_with_terminal_input() {
+      "$@"
+    }
+    sudo() {
+      return 0
+    }
+    install_packages arch $'SUPPORTED_PACKAGES=hyprland\nAUR_PACKAGES=\nUNSUPPORTED_GROUPS='
+  ) 2>&1)
+
+  assert_contains "$output" 'Authentication required. If prompted, enter your sudo password; input is hidden.' "install_packages should announce the hidden sudo prompt before authenticating"
 }
 
 test_install_packages_arch_uses_paru_for_aur_packages() {
@@ -513,8 +540,12 @@ run_tests() {
   echo "ok - downloader unsupported urls"
   test_download_with_progress_uses_curl_progress_for_https_urls
   echo "ok - downloader https curl"
+  test_run_with_terminal_input_restores_stdin_from_tty_path
+  echo "ok - terminal input wrapper"
   test_install_packages_arch_requires_aur_helper_for_aur_packages
   echo "ok - aur helper required"
+  test_install_packages_arch_announces_hidden_sudo_prompt
+  echo "ok - sudo prompt notice"
   test_install_packages_arch_uses_paru_for_aur_packages
   echo "ok - aur helper paru"
   test_deploy_configs_creates_backup_and_active_includes

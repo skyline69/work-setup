@@ -115,13 +115,48 @@ default_archive_url() {
 }
 
 tty_input_path() {
-  printf '%s\n' "${WORK_SETUP_TTY_PATH:-/dev/tty}"
+  if [[ -n "${WORK_SETUP_TTY_PATH:-}" ]]; then
+    printf '%s\n' "$WORK_SETUP_TTY_PATH"
+    return 0
+  fi
+
+  printf '/dev/tty\n'
+}
+
+tty_fd_order() {
+  printf '%s\n' "${WORK_SETUP_TTY_FD_ORDER:-2 1 0}"
+}
+
+tty_paths_from_fds() {
+  local fd path
+
+  for fd in $(tty_fd_order); do
+    path=$(readlink "/proc/$$/fd/$fd" 2>/dev/null || true)
+    [[ -n "$path" ]] || continue
+    case "$path" in
+      /dev/*|/*)
+        printf '%s\n' "$path"
+        ;;
+    esac
+  done
+}
+
+tty_input_candidates() {
+  tty_input_path
+  tty_paths_from_fds
 }
 
 open_tty_input_fd() {
-  local tty_path="$1"
+  local tty_path
 
-  exec {TTY_INPUT_FD}<"$tty_path" 2>/dev/null || return 1
+  while IFS= read -r tty_path; do
+    [[ -n "$tty_path" ]] || continue
+    { exec {TTY_INPUT_FD}<"$tty_path"; } 2>/dev/null || continue
+    TTY_INPUT_PATH="$tty_path"
+    return 0
+  done < <(tty_input_candidates 2>/dev/null)
+
+  return 1
 }
 
 close_tty_input_fd() {
@@ -129,18 +164,18 @@ close_tty_input_fd() {
     exec {TTY_INPUT_FD}<&-
     TTY_INPUT_FD=''
   fi
+  TTY_INPUT_PATH=''
 }
 
 run_with_terminal_input() {
-  local tty_path status
-  tty_path=$(tty_input_path)
+  local status
 
   if [[ -t 0 ]]; then
     "$@"
     return $?
   fi
 
-  if open_tty_input_fd "$tty_path"; then
+  if open_tty_input_fd; then
     "$@" <&"$TTY_INPUT_FD"
     status=$?
     close_tty_input_fd
@@ -151,9 +186,6 @@ run_with_terminal_input() {
 }
 
 restore_bootstrap_stdin_if_needed() {
-  local tty_path
-  tty_path=$(tty_input_path)
-
   if [[ -t 0 ]]; then
     return 0
   fi
@@ -162,11 +194,11 @@ restore_bootstrap_stdin_if_needed() {
     return 0
   fi
 
-  if ! open_tty_input_fd "$tty_path"; then
+  if ! open_tty_input_fd; then
     return 0
   fi
 
-  bootstrap_log "Restoring stdin from $tty_path for interactive commands"
+  bootstrap_log "Restoring stdin from ${TTY_INPUT_PATH:-terminal} for interactive commands"
   exec <&"$TTY_INPUT_FD"
   close_tty_input_fd
 }

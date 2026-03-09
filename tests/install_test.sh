@@ -178,6 +178,19 @@ test_run_with_terminal_input_restores_stdin_from_tty_path() {
   assert_eq 'terminal line' "$output" "run_with_terminal_input should restore stdin from the tty path when stdin is unavailable"
 }
 
+test_run_with_terminal_input_falls_back_to_tty_fd_path() {
+  local tty_input="$TEST_TMPDIR/fallback-tty-input.txt"
+  local output
+
+  printf 'fallback line\n' > "$tty_input"
+  exec 9< "$tty_input"
+
+  output=$(WORK_SETUP_TTY_FD_ORDER='9' run_with_terminal_input bash -lc 'read -r line; printf "%s\n" "$line"' </dev/null)
+  exec 9<&-
+
+  assert_eq 'fallback line' "$output" "run_with_terminal_input should fall back to a terminal path discovered from configured fds"
+}
+
 test_install_packages_arch_requires_aur_helper_for_aur_packages() {
   local output
   local status
@@ -542,6 +555,8 @@ run_tests() {
   echo "ok - downloader https curl"
   test_run_with_terminal_input_restores_stdin_from_tty_path
   echo "ok - terminal input wrapper"
+  test_run_with_terminal_input_falls_back_to_tty_fd_path
+  echo "ok - terminal input fallback"
   test_install_packages_arch_requires_aur_helper_for_aur_packages
   echo "ok - aur helper required"
   test_install_packages_arch_announces_hidden_sudo_prompt

@@ -441,6 +441,42 @@ EOS
   assert_contains "$output" 'stdin bootstrap target ran with --archive-url file://' "stdin installer should bootstrap from archive"
 }
 
+test_stdin_bootstrap_restores_input_stream_for_reexecuted_installer() {
+  local fixture_root="$TEST_TMPDIR/stdin-tty-archive-fixture/work-setup"
+  local archive_path="$TEST_TMPDIR/stdin-tty-work-setup.tar.gz"
+  local restored_input="$TEST_TMPDIR/restored-stdin.txt"
+  local output
+
+  mkdir -p "$fixture_root/hypr/machines/workstation" "$fixture_root/quickshell" "$fixture_root/scripts/packages" "$fixture_root/scripts"
+  cp "$ROOT_DIR/scripts/packages"/*.sh "$fixture_root/scripts/packages/"
+
+  printf 'restored terminal input\n' > "$restored_input"
+
+  cat > "$fixture_root/install.sh" <<'EOS'
+#!/usr/bin/env bash
+set -euo pipefail
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+exec "$SCRIPT_DIR/scripts/bootstrap-target.sh" "$@"
+EOS
+  chmod +x "$fixture_root/install.sh"
+
+  cat > "$fixture_root/scripts/bootstrap-target.sh" <<'EOS'
+#!/usr/bin/env bash
+set -euo pipefail
+if read -r restored_line; then
+  printf 'restored stdin: %s\n' "$restored_line"
+else
+  printf 'restored stdin: <none>\n'
+fi
+EOS
+  chmod +x "$fixture_root/scripts/bootstrap-target.sh"
+
+  tar -C "$TEST_TMPDIR/stdin-tty-archive-fixture" -czf "$archive_path" work-setup
+
+  output=$(WORK_SETUP_TTY_PATH="$restored_input" bash -s -- --archive-url "file://$archive_path" --dry-run --distro arch --machine workstation --yes < "$INSTALLER_PATH" 2>&1)
+  assert_contains "$output" 'restored stdin: restored terminal input' "stdin bootstrap should restore input for the re-executed installer"
+}
+
 test_sigint_during_prompt_exits_cleanly() {
   local output_file="$TEST_TMPDIR/sigint-output.log"
   local fifo="$TEST_TMPDIR/sigint-input.fifo"
@@ -511,6 +547,8 @@ run_tests() {
   echo "ok - standalone bootstrap"
   test_stdin_installer_bootstraps_from_archive
   echo "ok - stdin bootstrap"
+  test_stdin_bootstrap_restores_input_stream_for_reexecuted_installer
+  echo "ok - stdin restored"
   test_sigint_during_prompt_exits_cleanly
   echo "ok - sigint handler"
   test_quickshell_installer_delegates_to_root_installer

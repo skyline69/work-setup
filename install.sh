@@ -114,6 +114,25 @@ default_archive_url() {
 ' "$DEFAULT_ARCHIVE_URL"
 }
 
+restore_bootstrap_stdin_if_needed() {
+  local tty_path="${WORK_SETUP_TTY_PATH:-/dev/tty}"
+
+  if [[ -t 0 ]]; then
+    return 0
+  fi
+
+  if [[ -z "${WORK_SETUP_TTY_PATH:-}" && ! -t 1 && ! -t 2 ]]; then
+    return 0
+  fi
+
+  if [[ ! -r "$tty_path" ]]; then
+    return 0
+  fi
+
+  bootstrap_log "Restoring stdin from $tty_path for interactive commands"
+  exec < "$tty_path"
+}
+
 has_local_source_tree() {
   if $RUNNING_FROM_STDIN; then
     return 1
@@ -241,6 +260,7 @@ bootstrap_from_archive_if_needed() {
     exit 1
   }
 
+  restore_bootstrap_stdin_if_needed
   bootstrap_log "Re-executing installer from $extracted_root"
   exec "$extracted_root/install.sh" "$@"
 }

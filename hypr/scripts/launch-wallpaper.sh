@@ -24,6 +24,15 @@ if command -v awww-daemon >/dev/null 2>&1 && command -v awww >/dev/null 2>&1; th
   exec awww img "$wallpaper_path"
 fi
 
+if command -v swww-daemon >/dev/null 2>&1 && command -v swww >/dev/null 2>&1; then
+  if ! pgrep -x swww-daemon >/dev/null 2>&1; then
+    swww-daemon >/dev/null 2>&1 &
+    sleep 0.5
+  fi
+
+  exec swww img "$wallpaper_path"
+fi
+
 if command -v hyprpaper >/dev/null 2>&1 && command -v hyprctl >/dev/null 2>&1; then
   if ! pgrep -x hyprpaper >/dev/null 2>&1; then
     hyprpaper >/dev/null 2>&1 &

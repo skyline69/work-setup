@@ -104,6 +104,21 @@ test_resolve_package_plan_includes_supported_and_unsupported() {
   assert_contains "$output" "UNSUPPORTED_GROUPS=quickshell" "ubuntu should mark quickshell unsupported"
 }
 
+test_resolve_package_plan_uses_cargo_for_arch_wallpaper_group() {
+  local output
+  local supported_line
+  local cargo_line
+
+  output=$(resolve_package_plan arch wallpaper)
+  supported_line=$(awk -F= '$1 == "SUPPORTED_PACKAGES" { print $2 }' <<<"$output")
+  cargo_line=$(awk -F= '$1 == "CARGO_PACKAGES" { print $2 }' <<<"$output")
+
+  assert_contains "$supported_line" 'cargo' "arch wallpaper group should install cargo before cargo-managed wallpaper tools"
+  assert_contains "$supported_line" 'hyprpaper' "arch wallpaper group should keep hyprpaper available as a fallback"
+  assert_not_contains "$supported_line" 'awww' "arch wallpaper group should not send awww to pacman"
+  assert_eq 'awww' "$cargo_line" "arch wallpaper group should install awww via cargo"
+}
+
 test_download_with_progress_supports_file_urls() {
   local source_file="$TEST_TMPDIR/source.txt"
   local destination_file="$TEST_TMPDIR/destination.txt"
@@ -225,6 +240,70 @@ test_install_packages_arch_announces_hidden_sudo_prompt() {
   assert_contains "$output" 'Authentication required. If prompted, enter your sudo password; input is hidden.' "install_packages should announce the hidden sudo prompt before authenticating"
 }
 
+test_install_packages_arch_uses_cargo_binstall_for_cargo_packages() {
+  local stub_dir="$TEST_TMPDIR/cargo-binstall-stub"
+  local cargo_log="$TEST_TMPDIR/cargo-binstall.log"
+  local fake_cargo_home="$TEST_TMPDIR/cargo-home-with-binstall"
+  local output
+
+  mkdir -p "$stub_dir" "$fake_cargo_home/bin"
+  cat > "$stub_dir/cargo" <<EOF
+#!/bin/bash
+set -euo pipefail
+for arg in "\$@"; do
+  printf '%s\n' "\$arg" >> "$cargo_log"
+done
+EOF
+  chmod +x "$stub_dir/cargo"
+
+  cat > "$stub_dir/cargo-binstall" <<'EOF'
+#!/bin/bash
+set -euo pipefail
+exit 0
+EOF
+  chmod +x "$stub_dir/cargo-binstall"
+
+  output=$((
+    run_with_terminal_input() {
+      "$@"
+    }
+    PATH="$stub_dir" CARGO_HOME="$fake_cargo_home" install_cargo_package awww
+  ) 2>&1)
+
+  assert_contains "$output" 'Installing cargo package with cargo binstall: awww' "install_packages should announce cargo-binstall usage"
+  assert_file_contains "$cargo_log" 'binstall' "install_packages should invoke cargo binstall when cargo-binstall is available"
+  assert_file_contains "$cargo_log" '--no-confirm' "install_packages should run cargo binstall unattended"
+  assert_file_contains "$cargo_log" 'awww' "install_packages should pass the cargo-managed package to cargo binstall"
+}
+
+test_install_packages_arch_bootstraps_cargo_binstall_when_missing() {
+  local stub_dir="$TEST_TMPDIR/cargo-install-stub"
+  local cargo_log="$TEST_TMPDIR/cargo-install.log"
+  local fake_cargo_home="$TEST_TMPDIR/cargo-home-without-binstall"
+  local output
+
+  mkdir -p "$stub_dir" "$fake_cargo_home"
+  cat > "$stub_dir/cargo" <<EOF
+#!/bin/bash
+set -euo pipefail
+for arg in "\$@"; do
+  printf '%s\n' "\$arg" >> "$cargo_log"
+done
+EOF
+  chmod +x "$stub_dir/cargo"
+
+  output=$((
+    run_with_terminal_input() {
+      "$@"
+    }
+    PATH="$stub_dir" CARGO_HOME="$fake_cargo_home" install_cargo_package awww
+  ) 2>&1)
+
+  assert_contains "$output" 'Installing cargo-binstall with cargo install cargo-binstall' "install_packages should bootstrap cargo-binstall when missing"
+  assert_file_contains "$cargo_log" 'install' "install_packages should run cargo install when cargo-binstall is absent"
+  assert_file_contains "$cargo_log" 'cargo-binstall' "install_packages should install cargo-binstall before using it"
+}
+
 test_install_packages_arch_uses_paru_for_aur_packages() {
   local stub_dir="$TEST_TMPDIR/paru-stub"
   local paru_log="$TEST_TMPDIR/paru.log"
@@ -335,12 +414,58 @@ test_deploy_wallpapers_downloads_assets_and_selection_file() {
   assert_contains "$output" 'Downloaded wallpaper 2/2: zelda-pixel-art.3840x2160.gif' 'wallpaper deploy should log the last wallpaper download completion'
 }
 
+test_launch_wallpaper_uses_awww_when_available() {
+  local target_home="$TEST_TMPDIR/launch-home"
+  local selection_dir="$target_home/.config/work-setup"
+  local wallpaper_dir="$target_home/.local/share/work-setup/wallpapers"
+  local wallpaper_path="$wallpaper_dir/cozy.gif"
+  local stub_dir="$TEST_TMPDIR/launch-stubs"
+  local daemon_log="$TEST_TMPDIR/awww-daemon.log"
+  local awww_log="$TEST_TMPDIR/awww.log"
+
+  mkdir -p "$selection_dir" "$wallpaper_dir" "$stub_dir"
+  printf 'gif-data\n' > "$wallpaper_path"
+  cat > "$selection_dir/wallpaper.env" <<EOF
+WORK_SETUP_WALLPAPER_PATH=$wallpaper_path
+EOF
+
+  cat > "$stub_dir/awww-daemon" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'daemon-started\n' >> "$daemon_log"
+EOF
+  chmod +x "$stub_dir/awww-daemon"
+
+  cat > "$stub_dir/awww" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+for arg in "\$@"; do
+  printf '%s\n' "\$arg" >> "$awww_log"
+done
+EOF
+  chmod +x "$stub_dir/awww"
+
+  cat > "$stub_dir/pgrep" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+exit 1
+EOF
+  chmod +x "$stub_dir/pgrep"
+
+  XDG_CONFIG_HOME="$target_home/.config" HOME="$target_home" PATH="$stub_dir:$PATH" bash "$ROOT_DIR/hypr/scripts/launch-wallpaper.sh"
+
+  assert_file_contains "$daemon_log" 'daemon-started' 'wallpaper launcher should start awww-daemon when it is not running'
+  assert_file_contains "$awww_log" 'img' 'wallpaper launcher should use awww img to apply the wallpaper'
+  assert_file_contains "$awww_log" "$wallpaper_path" 'wallpaper launcher should pass the selected wallpaper path to awww'
+}
+
 test_main_dry_run_reports_wallpaper_selection() {
   local output
 
   output=$(installer_main --dry-run --distro arch --groups wallpaper --machine workstation --home "$TEST_TMPDIR/home" --yes 2>&1)
   assert_contains "$output" 'Selected wallpaper:' 'installer summary should mention wallpaper selection'
   assert_contains "$output" 'cozy-campfire-by-abi-toads.3840x2160.gif' 'installer should default to the cozy wallpaper during unattended dry runs'
+  assert_contains "$output" 'Cargo packages: awww' 'installer summary should mention cargo-managed wallpaper dependencies on Arch'
 }
 
 test_main_dry_run_skips_deploy() {
@@ -547,6 +672,8 @@ run_tests() {
   echo "ok - detect distro"
   test_resolve_package_plan_includes_supported_and_unsupported
   echo "ok - package plan"
+  test_resolve_package_plan_uses_cargo_for_arch_wallpaper_group
+  echo "ok - arch wallpaper package"
   test_download_with_progress_supports_file_urls
   echo "ok - downloader file urls"
   test_download_with_progress_rejects_unsupported_urls
@@ -561,6 +688,10 @@ run_tests() {
   echo "ok - aur helper required"
   test_install_packages_arch_announces_hidden_sudo_prompt
   echo "ok - sudo prompt notice"
+  test_install_packages_arch_uses_cargo_binstall_for_cargo_packages
+  echo "ok - cargo binstall packages"
+  test_install_packages_arch_bootstraps_cargo_binstall_when_missing
+  echo "ok - cargo binstall bootstrap"
   test_install_packages_arch_uses_paru_for_aur_packages
   echo "ok - aur helper paru"
   test_deploy_configs_creates_backup_and_active_includes
@@ -575,6 +706,8 @@ run_tests() {
   echo "ok - wallpaper release url"
   test_deploy_wallpapers_downloads_assets_and_selection_file
   echo "ok - deploy wallpapers"
+  test_launch_wallpaper_uses_awww_when_available
+  echo "ok - launch wallpaper with awww"
   test_main_dry_run_skips_deploy
   echo "ok - dry run"
   test_main_dry_run_reports_wallpaper_selection

@@ -41,6 +41,8 @@ Useful flags:
 
 When the `wallpaper` group is enabled, the installer downloads the wallpaper assets from the GitHub release for this repo into `~/.local/share/work-setup/wallpapers` and asks which wallpaper to use during interactive installs. Unattended runs default to `cozy-campfire-by-abi-toads.3840x2160.gif` unless `--wallpaper` is provided.
 
+On Arch, the wallpaper group installs `cargo` and `hyprpaper` with `pacman`, then installs `awww` with `cargo binstall` when available. If `cargo-binstall` is missing, the installer bootstraps it with `cargo install cargo-binstall` and falls back to `cargo install --git https://codeberg.org/LGFae/awww awww` if needed.
+
 ## Standalone Bootstrap Usage
 
 If you only have `install.sh`, it defaults to the GitHub archive for this repo. You can still override that source with `--archive-url` or `WORK_SETUP_ARCHIVE_URL`.

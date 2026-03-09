@@ -398,15 +398,19 @@ print_package_summary() {
   local groups_csv="$2"
   local package_plan="$3"
   local selected_wallpaper="${4:-}"
-  local packages_line unsupported_line
+  local packages_line cargo_packages_line unsupported_line
 
   packages_line=$(awk -F= '$1 == "SUPPORTED_PACKAGES" { print $2 }' <<<"$package_plan")
+  cargo_packages_line=$(awk -F= '$1 == "CARGO_PACKAGES" { print $2 }' <<<"$package_plan")
   unsupported_line=$(awk -F= '$1 == "UNSUPPORTED_GROUPS" { print $2 }' <<<"$package_plan")
 
   print_section "Package Summary"
   printf 'Distro: %s\n' "$distro"
   printf 'Groups: %s\n' "$(format_csv_as_list "$groups_csv")"
   printf 'Supported packages: %s\n' "${packages_line:-none}"
+  if [[ -n "$cargo_packages_line" ]]; then
+    printf 'Cargo packages: %s\n' "$cargo_packages_line"
+  fi
   printf 'Unsupported groups: %s\n' "$(format_csv_as_list "$unsupported_line")"
   if [[ -n "$selected_wallpaper" ]]; then
     printf 'Selected wallpaper: %s\n' "$selected_wallpaper"
@@ -590,11 +594,19 @@ aur_packages_for_group() {
   "aur_packages_for_group_${distro}" "$group"
 }
 
+cargo_packages_for_group() {
+  local distro="$1"
+  local group="$2"
+
+  "cargo_packages_for_group_${distro}" "$group"
+}
+
 resolve_package_plan() {
   local distro="$1"
   local groups_csv="$2"
   local -a supported_packages=()
   local -a aur_packages=()
+  local -a cargo_packages=()
   local -a unsupported_groups=()
   local group
 
@@ -608,6 +620,10 @@ resolve_package_plan() {
         [[ -n "$pkg" ]] || continue
         aur_packages+=("$pkg")
       done < <(aur_packages_for_group "$distro" "$group")
+      while IFS= read -r pkg; do
+        [[ -n "$pkg" ]] || continue
+        cargo_packages+=("$pkg")
+      done < <(cargo_packages_for_group "$distro" "$group")
     else
       unsupported_groups+=("$group")
     fi
@@ -615,6 +631,7 @@ resolve_package_plan() {
 
   printf 'SUPPORTED_PACKAGES=%s\n' "$(printf '%s\n' "${supported_packages[@]}" | awk '!seen[$0]++' | join_by_space)"
   printf 'AUR_PACKAGES=%s\n' "$(printf '%s\n' "${aur_packages[@]}" | awk '!seen[$0]++' | join_by_space)"
+  printf 'CARGO_PACKAGES=%s\n' "$(printf '%s\n' "${cargo_packages[@]}" | awk '!seen[$0]++' | join_by_space)"
   printf 'UNSUPPORTED_GROUPS=%s\n' "$(printf '%s\n' "${unsupported_groups[@]}" | join_by_comma)"
 }
 
@@ -635,6 +652,71 @@ aur_helper_for_arch() {
 ensure_sudo_credentials() {
   log INFO "Authentication required. If prompted, enter your sudo password; input is hidden."
   run_with_terminal_input sudo -p '[sudo] password for %u (input hidden): ' -v
+}
+
+cargo_bin_dir() {
+  printf '%s/bin\n' "${CARGO_HOME:-$HOME/.cargo}"
+}
+
+ensure_cargo_bin_dir_on_path() {
+  local cargo_bin
+  cargo_bin=$(cargo_bin_dir)
+
+  case ":$PATH:" in
+    *":$cargo_bin:"*) ;;
+    *) PATH="$cargo_bin:$PATH" ;;
+  esac
+}
+
+ensure_cargo_available() {
+  ensure_cargo_bin_dir_on_path
+  if command -v cargo >/dev/null 2>&1; then
+    return 0
+  fi
+
+  log ERROR "Cargo is required to install cargo-managed packages. Ensure the wallpaper group installs cargo or install it manually." >&2
+  return 1
+}
+
+ensure_cargo_binstall() {
+  ensure_cargo_available || return 1
+  if command -v cargo-binstall >/dev/null 2>&1; then
+    return 0
+  fi
+
+  log INFO "Installing cargo-binstall with cargo install cargo-binstall"
+  run_with_terminal_input cargo install cargo-binstall
+  ensure_cargo_bin_dir_on_path
+  command -v cargo-binstall >/dev/null 2>&1
+}
+
+cargo_install_args_for() {
+  case "$1" in
+    awww)
+      printf '%s\n' --git https://codeberg.org/LGFae/awww awww
+      ;;
+    *)
+      printf '%s\n' "$1"
+      ;;
+  esac
+}
+
+install_cargo_package() {
+  local package="$1"
+  local -a cargo_install_args=()
+
+  ensure_cargo_available || return 1
+  if ensure_cargo_binstall; then
+    log INFO "Installing cargo package with cargo binstall: $package"
+    if run_with_terminal_input cargo binstall --no-confirm "$package"; then
+      return 0
+    fi
+    log WARN "cargo binstall failed for $package; falling back to cargo install"
+  fi
+
+  mapfile -t cargo_install_args < <(cargo_install_args_for "$package")
+  log INFO "Installing cargo package with cargo install: $package"
+  run_with_terminal_input cargo install "${cargo_install_args[@]}"
 }
 
 backup_path_for() {
@@ -818,14 +900,17 @@ package_manager_for() {
 install_packages() {
   local distro="$1"
   local package_plan="$2"
-  local packages_line aur_packages_line unsupported_line
+  local packages_line aur_packages_line cargo_packages_line unsupported_line
   local package_manager
   local aur_helper=''
   local -a packages=()
   local -a aur_packages=()
+  local -a cargo_packages=()
+  local cargo_package
 
   packages_line=$(awk -F= '$1 == "SUPPORTED_PACKAGES" { print $2 }' <<<"$package_plan")
   aur_packages_line=$(awk -F= '$1 == "AUR_PACKAGES" { print $2 }' <<<"$package_plan")
+  cargo_packages_line=$(awk -F= '$1 == "CARGO_PACKAGES" { print $2 }' <<<"$package_plan")
   unsupported_line=$(awk -F= '$1 == "UNSUPPORTED_GROUPS" { print $2 }' <<<"$package_plan")
   package_manager=$(package_manager_for "$distro")
 
@@ -835,6 +920,7 @@ install_packages() {
 
   [[ -n "$packages_line" ]] && read -r -a packages <<<"$packages_line"
   [[ -n "$aur_packages_line" ]] && read -r -a aur_packages <<<"$aur_packages_line"
+  [[ -n "$cargo_packages_line" ]] && read -r -a cargo_packages <<<"$cargo_packages_line"
   if $DRY_RUN; then
     if [[ "${#packages[@]}" -gt 0 ]]; then
       log INFO "Dry run: $package_manager ${packages[*]}"
@@ -846,7 +932,10 @@ install_packages() {
       fi
       log INFO "Dry run: $aur_helper ${aur_packages[*]}"
     fi
-    if [[ "${#packages[@]}" -eq 0 && "${#aur_packages[@]}" -eq 0 ]]; then
+    if [[ "${#cargo_packages[@]}" -gt 0 ]]; then
+      log INFO "Dry run: cargo-managed packages ${cargo_packages[*]}"
+    fi
+    if [[ "${#packages[@]}" -eq 0 && "${#aur_packages[@]}" -eq 0 && "${#cargo_packages[@]}" -eq 0 ]]; then
       log WARN "No supported packages resolved for $distro"
     fi
     return 0
@@ -867,25 +956,38 @@ install_packages() {
         log INFO "Installing AUR packages with $aur_helper: ${aur_packages[*]}"
         run_with_terminal_input "$aur_helper" -S --needed --noconfirm "${aur_packages[@]}"
       fi
+      for cargo_package in "${cargo_packages[@]}"; do
+        install_cargo_package "$cargo_package"
+      done
       ;;
     fedora)
-      if [[ "${#packages[@]}" -eq 0 ]]; then
+      if [[ "${#packages[@]}" -eq 0 && "${#cargo_packages[@]}" -eq 0 ]]; then
         log WARN "No supported packages resolved for $distro"
         return 0
       fi
-      log INFO "Installing dnf packages: ${packages[*]}"
-      ensure_sudo_credentials
-      run_with_terminal_input sudo dnf install -y "${packages[@]}"
+      if [[ "${#packages[@]}" -gt 0 ]]; then
+        log INFO "Installing dnf packages: ${packages[*]}"
+        ensure_sudo_credentials
+        run_with_terminal_input sudo dnf install -y "${packages[@]}"
+      fi
+      for cargo_package in "${cargo_packages[@]}"; do
+        install_cargo_package "$cargo_package"
+      done
       ;;
     ubuntu)
-      if [[ "${#packages[@]}" -eq 0 ]]; then
+      if [[ "${#packages[@]}" -eq 0 && "${#cargo_packages[@]}" -eq 0 ]]; then
         log WARN "No supported packages resolved for $distro"
         return 0
       fi
-      log INFO "Installing apt packages: ${packages[*]}"
-      ensure_sudo_credentials
-      run_with_terminal_input sudo apt-get update
-      run_with_terminal_input sudo apt-get install -y "${packages[@]}"
+      if [[ "${#packages[@]}" -gt 0 ]]; then
+        log INFO "Installing apt packages: ${packages[*]}"
+        ensure_sudo_credentials
+        run_with_terminal_input sudo apt-get update
+        run_with_terminal_input sudo apt-get install -y "${packages[@]}"
+      fi
+      for cargo_package in "${cargo_packages[@]}"; do
+        install_cargo_package "$cargo_package"
+      done
       ;;
   esac
 }

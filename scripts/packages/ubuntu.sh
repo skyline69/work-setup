@@ -37,3 +37,7 @@ packages_for_group_ubuntu() {
 aur_packages_for_group_ubuntu() {
   return 0
 }
+
+cargo_packages_for_group_ubuntu() {
+  return 0
+}

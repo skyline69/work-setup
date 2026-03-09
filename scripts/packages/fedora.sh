@@ -37,3 +37,7 @@ packages_for_group_fedora() {
 aur_packages_for_group_fedora() {
   return 0
 }
+
+cargo_packages_for_group_fedora() {
+  return 0
+}

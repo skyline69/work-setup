@@ -23,7 +23,7 @@ packages_for_group_arch() {
       printf '%s\n' playerctl easyeffects
       ;;
     wallpaper)
-      printf '%s\n' awww hyprpaper
+      printf '%s\n' cargo hyprpaper
       ;;
     apps)
       printf '%s\n' dolphin chromium
@@ -38,6 +38,17 @@ aur_packages_for_group_arch() {
   case "$1" in
     quickshell)
       printf '%s\n' quickshell-git
+      ;;
+    *)
+      return 0
+      ;;
+  esac
+}
+
+cargo_packages_for_group_arch() {
+  case "$1" in
+    wallpaper)
+      printf '%s\n' awww
       ;;
     *)
       return 0
